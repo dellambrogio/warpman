@@ -1,0 +1,5 @@
+pycairo>=1.27
+Pillow>=12.1
+numpy>=2.0
+moderngl>=5.8      # optional: GL backend (--backend gl)
+pywayland>=0.4     # optional: Wayland background client (warpman_layer.py)

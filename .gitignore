@@ -1,5 +1,7 @@
 out/
 __pycache__/
 *.pyc
-swaylock-plugin/
+plugins/sway/swaylock-plugin/
 .venv/
+*.egg-info/
+.pytest_cache/

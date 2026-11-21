@@ -4,7 +4,7 @@
 Renders straight onto each monitor with OpenGL (EGL), using the GL backend's shaders:
 no frame readback and no pipe. Works as a swaylock-plugin background:
 
-    swaylock-plugin --command '/path/to/warpman_layer.py --status'
+    swaylock-plugin --command '/path/to/plugins/sway/layer.py --status'
 
 or on a desktop compositor as an animated wallpaper. Each monitor gets its own scene
 at its native resolution.
@@ -27,89 +27,30 @@ import signal
 import sys
 import time
 
-import cairo
 import moderngl
 from pywayland import ffi
 from pywayland.client import Display
 from pywayland.protocol.wayland import WlCompositor, WlOutput
 
-import warpman_drift as dr
-import warpman_gl
+from warpman import egl
+from warpman.drift import RAINBOW_MODES, Sim
+from warpman.gl import GLRenderer, StatusStrip
+from warpman.status import Status, on_battery
 from wayland_protocols.wlr_layer_shell_unstable_v1 import ZwlrLayerShellV1, ZwlrLayerSurfaceV1
 
-# --- EGL / wayland-egl through ctypes -------------------------------------------------
+# --- wayland-egl through ctypes (EGL itself is in warpman.egl) -------------------------
 
 vp = ctypes.c_void_p
-EGLint = ctypes.c_int32
-egl = ctypes.CDLL("libEGL.so.1")
 wegl = ctypes.CDLL("libwayland-egl.so.1")
-for name, res, args in [
-    ("eglGetPlatformDisplay", vp, [ctypes.c_uint, vp, vp]),
-    ("eglInitialize", ctypes.c_uint, [vp, ctypes.POINTER(EGLint), ctypes.POINTER(EGLint)]),
-    ("eglBindAPI", ctypes.c_uint, [ctypes.c_uint]),
-    ("eglChooseConfig", ctypes.c_uint, [vp, ctypes.POINTER(EGLint), ctypes.POINTER(vp), EGLint,
-                                        ctypes.POINTER(EGLint)]),
-    ("eglCreateContext", vp, [vp, vp, vp, ctypes.POINTER(EGLint)]),
-    ("eglCreateWindowSurface", vp, [vp, vp, vp, ctypes.POINTER(EGLint)]),
-    ("eglDestroySurface", ctypes.c_uint, [vp, vp]),
-    ("eglMakeCurrent", ctypes.c_uint, [vp, vp, vp, vp]),
-    ("eglSwapBuffers", ctypes.c_uint, [vp, vp]),
-    ("eglSwapInterval", ctypes.c_uint, [vp, EGLint]),
-    ("eglGetError", EGLint, []),
-    ("eglTerminate", ctypes.c_uint, [vp]),
-]:
-    getattr(egl, name).restype = res
-    getattr(egl, name).argtypes = args
 wegl.wl_egl_window_create.restype = vp
 wegl.wl_egl_window_create.argtypes = [vp, ctypes.c_int, ctypes.c_int]
 wegl.wl_egl_window_resize.argtypes = [vp, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
 wegl.wl_egl_window_destroy.argtypes = [vp]
 
-EGL_PLATFORM_WAYLAND_KHR = 0x31D8
-EGL_OPENGL_API = 0x30A2
-EGL_NONE = 0x3038
-EGL_SURFACE_TYPE, EGL_WINDOW_BIT = 0x3033, 0x0004
-EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT = 0x3040, 0x0008
-EGL_RED_SIZE, EGL_GREEN_SIZE, EGL_BLUE_SIZE = 0x3024, 0x3023, 0x3022
-EGL_CONTEXT_MAJOR_VERSION, EGL_CONTEXT_MINOR_VERSION = 0x3098, 0x30FB
-EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT = 0x30FD, 0x1
-
 
 def ptr(proxy) -> int:
     """Raw C pointer of a pywayland object, for passing to EGL."""
     return int(ffi.cast("uintptr_t", proxy._ptr))
-
-
-def attribs(*pairs) -> ctypes.Array:
-    return (EGLint * (len(pairs) + 1))(*pairs, EGL_NONE)
-
-
-class EGL:
-    """One EGL display + OpenGL 3.3 core context, shared by all monitors' surfaces."""
-
-    def __init__(self, display: Display):
-        self.dpy = egl.eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, ptr(display), None)
-        major, minor = EGLint(), EGLint()
-        if not self.dpy or not egl.eglInitialize(self.dpy, major, minor):
-            raise RuntimeError(f"eglInitialize failed (0x{egl.eglGetError():x})")
-        egl.eglBindAPI(EGL_OPENGL_API)
-        cfg, n = vp(), EGLint()
-        egl.eglChooseConfig(self.dpy, attribs(
-            EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
-            EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8), cfg, 1, n)
-        if n.value < 1:
-            raise RuntimeError("no suitable EGL config")
-        self.config = cfg
-        self.ctx = egl.eglCreateContext(self.dpy, cfg, None, attribs(
-            EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3,
-            EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT))
-        if not self.ctx:
-            raise RuntimeError(f"eglCreateContext failed (0x{egl.eglGetError():x})")
-        self.current(None)                  # surfaceless (Mesa supports it) until a monitor appears
-
-    def current(self, surface):
-        if not egl.eglMakeCurrent(self.dpy, surface, surface, self.ctx):
-            raise RuntimeError(f"eglMakeCurrent failed (0x{egl.eglGetError():x})")
 
 
 # --- one monitor ----------------------------------------------------------------------
@@ -120,8 +61,7 @@ class Output:
         self.name, self.scale = "?", 1
         self.surface = self.layer = self.egl_window = self.egl_surface = None
         self.size = None            # buffer size in pixels, once configured
-        self.sim = self.renderer = self.status_tex = None
-        self.status_key = None
+        self.sim = self.renderer = self.status_strip = None
         self.next_scene = 0.0
         self.frames = 0
         self.ready = True           # compositor wants a frame (frame callback arrived)
@@ -161,18 +101,15 @@ class Output:
         self.surface.set_buffer_scale(s)
         if self.egl_window is None:
             self.egl_window = wegl.wl_egl_window_create(ptr(self.surface), w, h)
-            self.egl_surface = egl.eglCreateWindowSurface(
-                self.app.egl.dpy, self.app.egl.config, self.egl_window, None)
-            if not self.egl_surface:
-                raise RuntimeError(f"eglCreateWindowSurface failed (0x{egl.eglGetError():x})")
+            self.egl_surface = self.app.egl.window_surface(self.egl_window)
             self.app.egl.current(self.egl_surface)
-            egl.eglSwapInterval(self.app.egl.dpy, 0)    # we pace frames ourselves
+            self.app.egl.swap_interval(0)               # we pace frames ourselves
         elif (w, h) != self.size:
             wegl.wl_egl_window_resize(self.egl_window, w, h, 0, 0)
         if self.sim is None:
-            self.sim = dr.Sim(self.app.sim_args, w, h)
+            self.sim = Sim(self.app.sim_args, w, h)
             self.next_scene = self.app.args.new_scene_every
-            self.renderer = warpman_gl.GLRenderer(self.app.gl)
+            self.renderer = GLRenderer(self.app.gl)
             print(f"{self.name}: {w}x{h} (scale {s})", file=sys.stderr, flush=True)
         else:
             self.sim.resize(w, h)
@@ -205,7 +142,7 @@ class Output:
         self.callback = self.surface.frame()
         self.callback.dispatcher["done"] = self.frame_done
         self.ready = self.dirty = False
-        egl.eglSwapBuffers(app.egl.dpy, self.egl_surface)
+        app.egl.swap(self.egl_surface)
         if self.frames == 0:
             print(f"{self.name}: first frame", file=sys.stderr, flush=True)
         elif self.frames == int(2 * app.args.fps):
@@ -217,30 +154,15 @@ class Output:
         self.callback = None
 
     def draw_status(self, w: int, h: int):
-        """Status text: drawn by cairo into a strip texture, redrawn only when it changes."""
-        st, hue = self.app.status, self.sim.scene.hue
-        st.update()
-        size = st.font_size(h)
-        sh = int(size * 3.5)
-        key = (st.text, round(hue), w, h)
-        if key != self.status_key:
-            img = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, sh)
-            st.draw(cairo.Context(img), w, sh, hue, size=size)
-            img.flush()
-            if self.status_tex is None or self.status_tex.size != (w, sh):
-                if self.status_tex:
-                    self.status_tex.release()
-                self.status_tex = self.app.gl.texture((w, sh), 4)
-                self.status_tex.swizzle = "BGRA"     # cairo ARGB32 is B,G,R,A bytes
-            self.status_tex.write(bytes(img.get_data()))
-            self.status_key = key
-        self.renderer.overlay(self.status_tex, 0, h - sh, (w, h))
+        if self.status_strip is None:
+            self.status_strip = StatusStrip(self.app.gl)
+        self.status_strip.draw(self.renderer, self.app.status, self.sim.scene.hue, (w, h))
 
     def destroy(self):
         app = self.app
         if self.egl_surface:
             app.egl.current(None)
-            egl.eglDestroySurface(app.egl.dpy, self.egl_surface)
+            app.egl.destroy_surface(self.egl_surface)
         if self.egl_window:
             wegl.wl_egl_window_destroy(self.egl_window)
         if self.layer:
@@ -260,7 +182,7 @@ class App:
         # Sim does lens motion/scenes/rainbow; we render and draw the status text ourselves
         self.sim_args = copy.copy(args)
         self.sim_args.backend, self.sim_args.status = "cairo", False
-        self.status = dr.Status() if args.status else None
+        self.status = Status() if args.status else None
         self.outputs: dict[int, Output] = {}
         self.compositor = self.layer_shell = None
 
@@ -274,7 +196,8 @@ class App:
         if not self.compositor or not self.layer_shell:
             sys.exit("compositor lacks wl_compositor or zwlr_layer_shell_v1")
 
-        self.egl = EGL(self.display)
+        self.egl = egl.Display(egl.PLATFORM_WAYLAND, ptr(self.display))
+        self.egl.current(None)              # surfaceless until a monitor appears
         self.gl = moderngl.create_context(require=330)   # attaches to our current EGL context
         self.screen = self.gl.detect_framebuffer(0)
         for name, version in self.pending_outputs:
@@ -304,8 +227,7 @@ class App:
         """Tear down in dependency order: surfaces, EGL, then the Wayland connection."""
         for out in list(self.outputs.values()):
             out.destroy()
-        egl.eglMakeCurrent(self.egl.dpy, None, None, None)
-        egl.eglTerminate(self.egl.dpy)
+        self.egl.terminate()
         self.display.flush()
         self.display.disconnect()
 
@@ -313,7 +235,7 @@ class App:
         """Every few seconds: battery -> still, AC -> animate; status text changes."""
         if now >= self.next_power_check:
             self.next_power_check = now + 5.0
-            still = self.args.still_on_battery and dr.on_battery()
+            still = self.args.still_on_battery and on_battery()
             if still != (not self.animate):
                 self.animate = not still
                 print("on battery: animation paused" if still else "animating",
@@ -367,7 +289,7 @@ def main():
                    help="switch to new random settings every N seconds (0 = never)")
     p.add_argument("--status", action="store_true",
                    help="show CPU usage and battery level in the bottom-right corner")
-    p.add_argument("--rainbow", choices=dr.RAINBOW_MODES)
+    p.add_argument("--rainbow", choices=RAINBOW_MODES)
     p.add_argument("--rainbow-speed", type=float, default=0.1, metavar="HZ")
     p.add_argument("--hue", type=float, metavar="DEG", help="fix the tint hue for every scene")
     p.add_argument("--saturation", type=float, metavar="0-1", help="fix the tint saturation")

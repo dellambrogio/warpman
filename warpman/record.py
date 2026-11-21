@@ -6,7 +6,7 @@ plays back in real time. Audio blocks are teed from the sound thread. Both go
 to ffmpeg through queues and writer threads, so a slow encoder never stalls the
 window or the speakers.
 
-The window shows frames held back by the A/V delay (see warpman_drift --av-delay),
+The window shows frames held back by the A/V delay (see apps/drift.py --av-delay),
 while each audio block is made from the live state. Shifting the audio by the
 same delay (-itsoffset) puts matching picture and sound together in the file.
 """

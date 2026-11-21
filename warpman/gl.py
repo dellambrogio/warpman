@@ -1,8 +1,8 @@
 """warpman GL backend - renders a warped grid on the GPU (headless EGL via moderngl).
 
-The look matches warpman.draw (the cairo backend): the same 4 px polylines, warped
+The look matches warpman.scene.draw (the cairo backend): the same 4 px polylines, warped
 by the same lens formula, with widths, brightness and saturation from
-warpman.line_styles, so both backends agree on every line, including where
+warpman.scene.line_styles, so both backends agree on every line, including where
 overlapping lenses fold the grid.
 
 The undisplaced segments only change with the scene's size and spacing, so they are
@@ -21,7 +21,7 @@ Two passes per frame:
 
 Offscreen (default): frames are read back as BGRX bytes, the same layout as a cairo
 FORMAT_RGB24 surface, so callers can wrap them in a cairo surface or stream them.
-On screen (warpman_layer.py): pass an existing context and a target framebuffer;
+On screen (plugins/sway/layer.py, plugins/i3/saver.py): pass an existing context and a target framebuffer;
 the composite then writes RGB with the image flipped to GL's bottom-up rows, and a
 small cairo-drawn overlay (the status text) can be blended on top.
 """
@@ -29,14 +29,14 @@ small cairo-drawn overlay (the status text) can be blended on top.
 import moderngl
 import numpy as np
 
-import warpman as wm
+from warpman import scene as wm
 
 MAX_LINES = 256     # vertical + horizontal; 8K at the smallest spacing needs ~120
 QUANT = 64.0        # distance resolution: 1/64 px
 MAX_DIST = 8.0      # distances beyond this (px) count as "no line here"
 EMPTY = 1e9         # cleared value; decodes to a distance well past MAX_DIST
 MAX_LENSES = 16
-STEP = 4.0          # polyline sample spacing in px, as in warpman.draw
+STEP = 4.0          # polyline sample spacing in px, as in warpman.scene.draw
 BEND_STEP = 16.0    # coarser sampling for the per-line width/brightness on the CPU
 
 GEOMETRY_VS = f"""
@@ -53,7 +53,7 @@ out vec2 v_b;
 flat out float v_id;
 flat out float v_vertical;
 
-// warpman.warp_array: s*R*t*(1-t^2)^2 along d/r, which simplifies to d * s*(1 - r^2/R^2)^2
+// warpman.scene.warp_array: s*R*t*(1-t^2)^2 along d/r, which simplifies to d * s*(1 - r^2/R^2)^2
 vec2 warp(vec2 p) {{
     vec2 o = vec2(0.0);
     for (int i = 0; i < n_lenses; i++) {{
@@ -277,7 +277,7 @@ class GLRenderer:
     def render(self, scene: wm.Scene, rainbow=None, target=None) -> bytearray | None:
         """Render scene; returns a reused bytearray of BGRX rows, top row first.
 
-        rainbow is a warpman_drift.Rainbow (already updated for this frame) or None.
+        rainbow is a warpman.drift.Rainbow (already updated for this frame) or None.
         With target (a moderngl framebuffer, e.g. the window's), draws there instead
         and returns None; the caller presents it (eglSwapBuffers).
         """
@@ -354,3 +354,33 @@ class GLRenderer:
         self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA
         self.ovl_vao.render(moderngl.TRIANGLE_STRIP, vertices=4)
         self.ctx.disable(moderngl.BLEND)
+
+
+class StatusStrip:
+    """The status text (CPU / battery) for an on-screen target: drawn by cairo into a
+    strip texture along the bottom edge, redrawn only when the text, hue or size changes."""
+
+    def __init__(self, ctx: "moderngl.Context"):
+        self.ctx = ctx
+        self.tex = None
+        self.key = None
+
+    def draw(self, renderer: GLRenderer, status, hue: float, size: tuple[int, int]):
+        import cairo
+        w, h = size
+        status.update()
+        font = status.font_size(h)
+        sh = int(font * 3.5)
+        key = (status.text, round(hue), w, h)
+        if key != self.key:
+            img = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, sh)
+            status.draw(cairo.Context(img), w, sh, hue, size=font)
+            img.flush()
+            if self.tex is None or self.tex.size != (w, sh):
+                if self.tex:
+                    self.tex.release()
+                self.tex = self.ctx.texture((w, sh), 4)
+                self.tex.swizzle = "BGRA"     # cairo ARGB32 is B,G,R,A bytes
+            self.tex.write(bytes(img.get_data()))
+            self.key = key
+        renderer.overlay(self.tex, 0, h - sh, (w, h))

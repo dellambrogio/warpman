@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "warpman"
+version = "0.1.0"
+description = "Warped-grid wallpapers, an animated drift, and lock-screen backgrounds"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "pycairo>=1.27",
+    "Pillow>=12.1",
+    "numpy>=2.0",
+]
+
+[project.optional-dependencies]
+gl = ["moderngl>=5.8"]            # GL backend, and both lock screens
+wayland = ["pywayland>=0.4"]      # sway lock screen (plugins/sway)
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["warpman*"]
+
+[tool.pytest.ini_options]
+testpaths = ["warpman/tests"]

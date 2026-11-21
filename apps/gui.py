@@ -19,7 +19,7 @@ from tkinter import filedialog, ttk
 
 import cairo
 
-import warpman as wm
+from warpman import scene as wm
 
 PRESETS = ["1280x800", "1024x768", "1920x1080", "2560x1440", "2560x1600", "3840x2160"]
 PREVIEW_MAX = (960, 640)

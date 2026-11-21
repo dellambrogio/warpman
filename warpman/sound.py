@@ -1,4 +1,4 @@
-"""warpman sound - generative audio for warpman_drift.
+"""warpman sound - generative audio for the drift window (apps/drift.py).
 
 Everything is synthesised with NumPy and streamed as raw 16-bit stereo to an
 external player (pw-cat, pacat or aplay), so there are no extra Python deps.
@@ -38,7 +38,7 @@ import time
 
 import numpy as np
 
-import warpman as wm
+from warpman import scene as wm
 
 SR = 48000
 BLOCK = 512                       # ~11 ms per block

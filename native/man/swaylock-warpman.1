@@ -1,0 +1,91 @@
+.TH SWAYLOCK-WARPMAN 1 "2026" "warpman" "User Commands"
+.SH NAME
+swaylock-warpman \- screen locker for sway with the warpman drift animation
+.SH SYNOPSIS
+.B swaylock-warpman
+[\fIswaylock options\fR] [\fB\-\-\fR \fIdrift options\fR]
+.br
+.B swaylock-warpman \-\-preview
+[\fIdrift options\fR]
+.br
+.B swaylock-warpman \-\-background
+[\fIdrift options\fR]
+.br
+.B swaylock-warpman \-\-help\-swaylock
+.SH DESCRIPTION
+.B swaylock-warpman
+is swaylock-plugin (built in) with the warpman drift animation as its background:
+a thin tinted grid on black, bent by slowly wandering lenses, rendered with OpenGL on
+every monitor at its native resolution.
+.PP
+Without a mode option it locks the screen. \fB\-f\fR (daemonize) and \fB\-c 000000\fR
+are passed to swaylock-plugin unless \fB\-\-no\-daemonize\fR is given, and the
+background command is set to \fBswaylock-warpman \-\-background\fR plus any drift
+options after \fB\-\-\fR. All other options are swaylock-plugin's
+(\fB\-\-help\-swaylock\fR lists them); its config file is ~/.config/swaylock/config.
+.PP
+\fB\-\-preview\fR shows the animation above the windows of the running compositor
+for 10 seconds (clicks pass through). \fB\-\-background\fR is what the locker runs.
+.PP
+Authentication uses the PAM service \fBswaylock-warpman\fR (/etc/pam.d/swaylock-warpman).
+.SH DRIFT OPTIONS
+.TP
+.BI \-\-fps " N"
+Frame rate (default 24).
+.TP
+.BI \-\-new\-scene\-every " SEC"
+Switch to a new random scene every SEC seconds; 0 = never (default 300).
+.TP
+.BI \-\-hue " DEG" "\fR|\fPrandom"
+Tint hue (default 120, green).
+.TP
+.BI \-\-saturation " S" "\fR|\fPrandom"
+Tint saturation 0\-1 (default 0.5).
+.TP
+.BI \-\-seed " N"
+Seed of the first scene (the same seed gives the same scene as the Python warpman).
+.TP
+.BI \-\-lenses " N"
+Number of lenses; 0 = random 1\-3.
+.TP
+.BI \-\-speed " PX"
+Lens speed in px/s at 1280 wide (default 60).
+.TP
+.BI \-\-rainbow " MODE"
+off, wave, ripple or cycle.
+.TP
+.BI \-\-rainbow\-speed " HZ"
+Spectrum cycles per second (default 0.1).
+.TP
+.BR \-\-status " / " \-\-no\-status
+CPU and battery text in the bottom-right corner (default on).
+.TP
+.BR \-\-still\-on\-battery " / " \-\-animate\-on\-battery
+Pause the animation on battery power (default: pause).
+.TP
+.BI \-\-duration " SEC"
+Exit after SEC seconds.
+.TP
+.B \-\-layer background\fR|\fBoverlay
+Layer-shell layer of the client.
+.SH ENVIRONMENT
+DRIFT_FPS, DRIFT_SCENE_SECONDS, DRIFT_HUE, DRIFT_SATURATION, DRIFT_STATUS (0 hides the
+text), DRIFT_ANIMATE_ON_BATTERY (1 keeps animating), DRIFT_SEED, DRIFT_LENSES,
+DRIFT_SPEED, DRIFT_RAINBOW and DRIFT_RAINBOW_SPEED set the defaults of the options
+above.
+.SH FILES
+.TP
+.I $XDG_RUNTIME_DIR/warpman-lock.log
+Background log, started afresh on each lock.
+.SH EXAMPLE
+In the sway config:
+.PP
+.nf
+set $lock swaylock-warpman
+exec swayidle \-w timeout 300 $lock before\-sleep $lock
+bindsym $mod+BackSpace exec $lock
+bindsym \-\-locked $mod+Ctrl+BackSpace exec 'pkill \-x swaylock-warpman; $lock'
+.fi
+.SH SEE ALSO
+.BR swayidle (1),
+.BR i3lock-warpman (1)

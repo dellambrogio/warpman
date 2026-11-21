@@ -19,11 +19,9 @@ Two passes per frame:
      and composites like cairo: background, vertical lines, horizontal lines on top.
      Line colour (plain tint or rainbow) is computed per pixel here.
 
-Offscreen (default): frames are read back as BGRX bytes, the same layout as a cairo
-FORMAT_RGB24 surface, so callers can wrap them in a cairo surface or stream them.
-On screen (plugins/sway/layer.py, plugins/i3/saver.py): pass an existing context and a target framebuffer;
-the composite then writes RGB with the image flipped to GL's bottom-up rows, and a
-small cairo-drawn overlay (the status text) can be blended on top.
+Frames are read back as BGRX bytes, the same layout as a cairo FORMAT_RGB24 surface,
+so callers can wrap them in a cairo surface or stream them. (The lock screens draw the
+same shaders straight onto the screen from C: see native/core/gl_render.c.)
 """
 
 import moderngl
@@ -186,25 +184,6 @@ void main() {{
 }}
 """
 
-OVERLAY_VS = """
-#version 330
-uniform vec4 rect;      // x0, y0, x1, y1 in NDC
-out vec2 uv;
-void main() {
-    vec2 c = vec2(gl_VertexID & 1, (gl_VertexID >> 1) & 1);
-    uv = vec2(c.x, 1.0 - c.y);          // texture row 0 is the top of the cairo image
-    gl_Position = vec4(mix(rect.xy, rect.zw, c), 0.0, 1.0);
-}
-"""
-
-OVERLAY_FS = """
-#version 330
-uniform sampler2D tex;  // premultiplied ARGB32 from cairo, swizzled to RGBA
-in vec2 uv;
-out vec4 frag;
-void main() { frag = texture(tex, uv); }
-"""
-
 MODES = {None: 0, "wave": 1, "ripple": 2, "cycle": 3}
 
 
@@ -227,8 +206,6 @@ class GLRenderer:
         self.geo = self.ctx.program(vertex_shader=GEOMETRY_VS, fragment_shader=GEOMETRY_FS)
         self.comp = self.ctx.program(vertex_shader=COMPOSITE_VS, fragment_shader=COMPOSITE_FS)
         self.comp_vao = self.ctx.vertex_array(self.comp, [])
-        self.ovl = self.ctx.program(vertex_shader=OVERLAY_VS, fragment_shader=OVERLAY_FS)
-        self.ovl_vao = self.ctx.vertex_array(self.ovl, [])
         self.seg_buf = self.id_buf = self.geo_vao = None
         self.grid_key = None        # (size, spacing, offset) the uploaded segments belong to
         self.n_segs = 0
@@ -274,12 +251,10 @@ class GLRenderer:
         if name in prog:                    # the GLSL compiler drops unused uniforms
             prog[name].value = value
 
-    def render(self, scene: wm.Scene, rainbow=None, target=None) -> bytearray | None:
+    def render(self, scene: wm.Scene, rainbow=None) -> bytearray:
         """Render scene; returns a reused bytearray of BGRX rows, top row first.
 
         rainbow is a warpman.drift.Rainbow (already updated for this frame) or None.
-        With target (a moderngl framebuffer, e.g. the window's), draws there instead
-        and returns None; the caller presents it (eglSwapBuffers).
         """
         w, h = scene.width, scene.height
         styles = wm.line_styles(scene, step=BEND_STEP)
@@ -325,13 +300,8 @@ class GLRenderer:
                 self._set(c, "lam", r.lam)
         self.key_tex.use(0)
         self._set(c, "keys", 0)
-        self._set(c, "to_screen", target is not None)
+        self._set(c, "to_screen", False)
         self._set(c, "height", float(h))
-        if target is not None:
-            target.viewport = (0, 0, w, h)
-            target.use()
-            self.comp_vao.render(moderngl.TRIANGLES, vertices=3)
-            return None
         if self.out_fbo is None:
             self.out_fbo = ctx.simple_framebuffer((w, h), components=4)
             self.buf = bytearray(w * h * 4)
@@ -339,48 +309,3 @@ class GLRenderer:
         self.comp_vao.render(moderngl.TRIANGLES, vertices=3)
         self.out_fbo.read_into(self.buf, components=4)
         return self.buf
-
-    def overlay(self, tex: "moderngl.Texture", x: int, y: int, size: tuple[int, int]):
-        """Blend a premultiplied texture onto the current target at image pixel (x, y)
-        (top-left, y down), for a target of the given size."""
-        w, h = size
-        tw, th = tex.size
-        x0, x1 = x / w * 2 - 1, (x + tw) / w * 2 - 1
-        y0, y1 = 1 - (y + th) / h * 2, 1 - y / h * 2        # NDC y runs up
-        self._set(self.ovl, "rect", (x0, y0, x1, y1))
-        tex.use(0)
-        self._set(self.ovl, "tex", 0)
-        self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA
-        self.ovl_vao.render(moderngl.TRIANGLE_STRIP, vertices=4)
-        self.ctx.disable(moderngl.BLEND)
-
-
-class StatusStrip:
-    """The status text (CPU / battery) for an on-screen target: drawn by cairo into a
-    strip texture along the bottom edge, redrawn only when the text, hue or size changes."""
-
-    def __init__(self, ctx: "moderngl.Context"):
-        self.ctx = ctx
-        self.tex = None
-        self.key = None
-
-    def draw(self, renderer: GLRenderer, status, hue: float, size: tuple[int, int]):
-        import cairo
-        w, h = size
-        status.update()
-        font = status.font_size(h)
-        sh = int(font * 3.5)
-        key = (status.text, round(hue), w, h)
-        if key != self.key:
-            img = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, sh)
-            status.draw(cairo.Context(img), w, sh, hue, size=font)
-            img.flush()
-            if self.tex is None or self.tex.size != (w, sh):
-                if self.tex:
-                    self.tex.release()
-                self.tex = self.ctx.texture((w, sh), 4)
-                self.tex.swizzle = "BGRA"     # cairo ARGB32 is B,G,R,A bytes
-            self.tex.write(bytes(img.get_data()))
-            self.key = key
-        renderer.overlay(self.tex, 0, h - sh, (w, h))

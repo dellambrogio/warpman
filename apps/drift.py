@@ -12,7 +12,7 @@ Keys: space / n = new random settings, r = next rainbow mode,
 With --sound the picture is held back by the measured audio latency (--av-delay).
 
 --raw writes headless BGR0 frames to stdout instead of opening a window, e.g. to
-record a video with ffmpeg. (The lock screens use plugins/ instead.)
+record a video with ffmpeg. (The lock screens are the native programs in native/.)
 
 --status draws CPU usage and battery level in the bottom-right corner.
 

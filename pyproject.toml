@@ -15,8 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gl = ["moderngl>=5.8"]            # GL backend, and both lock screens
-wayland = ["pywayland>=0.4"]      # sway lock screen (plugins/sway)
+gl = ["moderngl>=5.8"]            # GL backend
 dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]

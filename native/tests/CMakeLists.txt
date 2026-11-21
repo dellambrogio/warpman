@@ -1,0 +1,8 @@
+foreach(t test_parity test_status test_scene)
+    add_executable(${t} ${t}.c)
+    target_compile_options(${t} PRIVATE ${WARPMAN_C_FLAGS})
+    target_link_libraries(${t} PRIVATE warpman_core)
+endforeach()
+add_test(NAME parity COMMAND test_parity ${CMAKE_CURRENT_SOURCE_DIR}/golden.txt)
+add_test(NAME status COMMAND test_status)
+add_test(NAME scene COMMAND test_scene)

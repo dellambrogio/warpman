@@ -1,0 +1,57 @@
+.TH I3LOCK-WARPMAN 1 "2026" "warpman" "User Commands"
+.SH NAME
+i3lock-warpman \- screen locker for i3 / X11 with the warpman drift animation
+.SH SYNOPSIS
+.B i3lock-warpman
+[\fIdrift options\fR] [\fB\-\-\fR \fIcommand\fR]
+.br
+.B i3lock-warpman \-\-preview
+[\fIdrift options\fR]
+.br
+.B i3lock-warpman \-\-saver
+[\fIdrift options\fR]
+.SH DESCRIPTION
+.B i3lock-warpman
+locks the screen with
+.BR xsecurelock (1)
+and runs the warpman drift animation as its saver on every monitor: a thin tinted grid
+on black, bent by slowly wandering lenses, rendered with OpenGL straight into the
+window xsecurelock creates. It stops drawing while the monitor is off (DPMS).
+.PP
+When locking it sets XSECURELOCK_SAVER to itself, and XSECURELOCK_SHOW_DATETIME=1 and
+XSECURELOCK_SAVER_RESET_ON_AUTH_CLOSE=0 unless they are already set; other
+XSECURELOCK_* variables pass through. A \fIcommand\fR after \fB\-\-\fR is passed on to
+xsecurelock, which runs it while the screen is locked.
+.PP
+xsecurelock runs \fBi3lock-warpman\fR again as the saver, with $XSCREENSAVER_WINDOW
+set (\fB\-\-saver\fR does the same explicitly). \fB\-\-preview\fR opens the animation in
+a normal window.
+.SH DRIFT OPTIONS
+The same as
+.BR swaylock-warpman (1),
+plus:
+.TP
+.BI \-\-window\-id " XID"
+Draw into this window (default: $XSCREENSAVER_WINDOW).
+.TP
+.BI \-W " N" "\fR, \fP" \-H " N"
+Size of the preview window (default 1280x800).
+.SH ENVIRONMENT
+The DRIFT_* variables set the option defaults, as for
+.BR swaylock-warpman (1).
+.SH FILES
+.TP
+.I $XDG_RUNTIME_DIR/warpman-lock-x11.log
+Saver log, started afresh on each lock.
+.SH EXAMPLE
+In the i3 config:
+.PP
+.nf
+set $lock i3lock-warpman
+exec \-\-no\-startup\-id xss\-lock \-\-transfer\-sleep\-lock \-\- $lock
+bindsym $mod+BackSpace exec \-\-no\-startup\-id $lock
+.fi
+.SH SEE ALSO
+.BR xsecurelock (1),
+.BR xss-lock (1),
+.BR swaylock-warpman (1)

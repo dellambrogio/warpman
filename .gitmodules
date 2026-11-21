@@ -1,0 +1,3 @@
+[submodule "native/third_party/swaylock-plugin"]
+	path = native/third_party/swaylock-plugin
+	url = https://github.com/mstoeckl/swaylock-plugin.git

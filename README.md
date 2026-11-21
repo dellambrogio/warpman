@@ -1,6 +1,6 @@
 # warpman
 
-Generates warped-grid wallpapers: a thin tinted grid on black, bent by smooth radial "lenses" that fade to zero at their radius. It comes with a still-image CLI, a live editor, and an animated version that also works as a lock screen on sway and on i3 / X11.
+Generates warped-grid wallpapers: a thin tinted grid on black, bent by smooth radial "lenses" that fade to zero at their radius. It comes with a still-image CLI, a live editor, an animated version, and lock screens for sway and for i3 / X11 (native Ubuntu packages).
 
 ![warpman drift animation](docs/drift.webp)
 
@@ -16,11 +16,13 @@ Generates warped-grid wallpapers: a thin tinted grid on black, bent by smooth ra
 ```sh
 sudo apt install python3-venv python3-tk python3-dev libcairo2-dev pkg-config   # Tk, plus headers to build pycairo
 python3 -m venv .venv
-.venv/bin/pip install -e '.[gl,wayland,dev]'   # the warpman package, editable, with all extras
+.venv/bin/pip install -e '.[gl,dev]'   # the warpman package, editable, with all extras
 source .venv/bin/activate          # then apps/still.py etc. run inside the venv
 ```
 
-`pyproject.toml` needs pycairo, Pillow and NumPy. The extras add the rest: `gl` (moderngl) for the GL backend and both lock screens, `wayland` (pywayland) for the sway lock screen, and `dev` (pytest) for the tests. Tk comes from the system (`python3-tk`), not from pip. `just setup` does the venv and the install in one go. The lock-screen scripts use `.venv/bin/python` automatically when it can import cairo, and fall back to the system `python3` otherwise. They put the repo on `PYTHONPATH`, so they work without the install too.
+`pyproject.toml` needs pycairo, Pillow and NumPy. The extras add the rest: `gl` (moderngl) for the GL backend, and `dev` (pytest) for the tests. Tk comes from the system (`python3-tk`), not from pip. `just setup` does the venv and the install in one go.
+
+The lock screens are separate native programs in C, packaged as `.deb`s; they don't need Python. See [Lock screens](#lock-screens).
 
 ## Layout
 
@@ -28,20 +30,21 @@ source .venv/bin/activate          # then apps/still.py etc. run inside the venv
 warpman/            the Python package (the library; no programs)
   scene.py          lenses, the warp, grid lines, line styles; cairo drawing and saving
   drift.py          the animation: wandering lenses, scene changes, rainbow colouring
-  gl.py             GPU renderer (moderngl), offscreen or onto a window
-  egl.py            EGL context for the on-screen clients in plugins/
+  gl.py             GPU renderer (moderngl), offscreen
   status.py         CPU / battery status text, on-battery detection
   sound.py          generative audio for the drift window
   record.py         MP4 recording through ffmpeg
   tests/            unit tests (pytest)
 apps/               programs: still.py (images), gui.py (editor), drift.py (animated window)
-plugins/
-  sway/             swaylock-plugin background (layer.py, lock-bg.sh); swaylock-plugin/ is
-                    its upstream source checkout (git-ignored, only for building it)
-  i3/               xsecurelock saver for i3 / X11 (saver.py, saver.sh, lock.sh)
+native/             the lock screens in C (CMake; packaged as .debs with CPack); see native/README.md
+  core/             drift, scene and status ported from warpman/, EGL, the GL renderer
+  wayland/          swaylock-warpman: swaylock-plugin + the layer-shell background client
+  x11/              i3lock-warpman: xsecurelock + the X11 saver
+  tests/            ctest unit tests, incl. bit-exact parity with the Python drift
+  third_party/      swaylock-plugin (git submodule)
 ```
 
-Run the tests with `just test` (or `.venv/bin/python -m pytest`). The GL tests skip themselves when no OpenGL 3.3 context can be made, and the MP4 test skips itself without ffmpeg.
+Run the tests with `just test` (or `.venv/bin/python -m pytest`), and the native ones with `just native-test`. The GL tests skip themselves when no OpenGL 3.3 context can be made, and the MP4 test skips itself without ffmpeg.
 
 ## Still images
 
@@ -146,41 +149,80 @@ ffmpeg -i docs/drift.mp4 -t 8 -vf "fps=20,scale=800:-1:flags=lanczos" \
        -c:v libwebp_anim -q:v 70 -loop 0 docs/drift.webp
 ```
 
-## Lock screen (sway)
+## Lock screens
 
-`plugins/sway/lock-bg.sh` runs `plugins/sway/layer.py` under [swaylock-plugin](https://github.com/mstoeckl/swaylock-plugin), which shows the live animation behind its password prompt. `layer.py` is the drift animation as a Wayland background client (wlr-layer-shell). It renders with the GL backend's shaders straight onto each monitor through EGL, so frames are never copied back to the CPU. Each monitor gets its own scene at its native resolution. At 3840×1600 and 24 fps it uses about 2% of a core. Frames are only drawn when the compositor asks for one, so nothing is rendered while a monitor is off.
+Two Ubuntu packages show the drift animation on the lock screen:
 
-On battery power the animation pauses: the last frame stays on screen, and it's only redrawn when the status text changes (about 0.1% of a core). It resumes when power comes back. Set `DRIFT_ANIMATE_ON_BATTERY=1` to keep animating anyway.
+| package | for | locks with |
+|---|---|---|
+| `swaylock-warpman` | sway and other wlroots compositors | [swaylock-plugin](https://github.com/mstoeckl/swaylock-plugin), built in |
+| `i3lock-warpman` | i3 and other X11 desktops | [xsecurelock](https://github.com/google/xsecurelock) |
 
-The script switches to a new scene every `DRIFT_SCENE_SECONDS` (default 300). The frame rate is set by `DRIFT_FPS` (default 24). The grid is always tinted green (`--hue 120 --saturation 0.5`); change it with `DRIFT_HUE` (0–360) and `DRIFT_SATURATION` (0–1). CPU usage and battery level are shown in small type in the bottom-right corner (refreshed every 2 s); set `DRIFT_STATUS=0` to hide them. Errors go to `$XDG_RUNTIME_DIR/warpman-lock.log`. If the client can't start, for example because there's no OpenGL 3.3, the lock screen shows its plain colour instead, and the script retries every 10 s.
+Both are written in C (`native/`) and render with the GL backend's shaders straight onto each monitor through EGL, so frames are never copied back to the CPU. Each monitor gets its own scene at its native resolution. The drift is a bit-for-bit port of `warpman/drift.py`: the same `--seed` gives the same scene and motion as `apps/drift.py`, and `just native-test` checks that against reference values from the Python code.
 
-swaylock-plugin isn't packaged for Ubuntu. Its source checkout lives in `plugins/sway/swaylock-plugin/`, and `.gitignore` excludes it. To build it, run this from `plugins/sway/`:
+### Building the packages
 
 ```sh
-sudo apt install meson ninja-build scdoc wayland-protocols libwayland-dev libxkbcommon-dev \
-    libcairo2-dev libgdk-pixbuf-2.0-dev libpam0g-dev
-git clone https://github.com/mstoeckl/swaylock-plugin.git
-(cd swaylock-plugin && meson setup build && ninja -C build && sudo ninja -C build install)
-sudo cp /usr/local/etc/pam.d/swaylock-plugin /etc/pam.d/   # PAM ignores /usr/local/etc
+sudo apt install build-essential cmake pkg-config wayland-protocols libwayland-dev \
+    libxkbcommon-dev libegl-dev libepoxy-dev libx11-dev libxext-dev libcairo2-dev libpam0g-dev
+git submodule update --init          # swaylock-plugin's source
+just deb                             # → build/swaylock-warpman_*.deb, build/i3lock-warpman_*.deb
+sudo apt install ./build/swaylock-warpman_*.deb    # and / or ./build/i3lock-warpman_*.deb
 ```
 
-Then add this to the sway config:
+`just deb` runs `cmake -S native -B build`, builds, and then calls `cpack`. `cmake -DWARPMAN_X11=OFF` or `-DWARPMAN_WAYLAND=OFF` builds only one of them. `just preview` (sway) and `just preview-x11` show the animation from the build tree without locking anything.
+
+### Settings
+
+Both lockers read the same environment variables, and the same settings are also command-line options (`swaylock-warpman --help`, `man swaylock-warpman`):
+
+| variable | default | |
+|---|---|---|
+| `DRIFT_FPS` | 24 | frame rate |
+| `DRIFT_SCENE_SECONDS` | 300 | switch to a new random scene this often (0 = never) |
+| `DRIFT_HUE` | 120 | tint hue 0–360, or `random` |
+| `DRIFT_SATURATION` | 0.5 | tint saturation 0–1, or `random` |
+| `DRIFT_STATUS` | 1 | CPU usage and battery level in small type in the bottom-right corner (refreshed every 2 s); 0 hides them |
+| `DRIFT_ANIMATE_ON_BATTERY` | 0 | 1 keeps animating on battery power |
+| `DRIFT_SEED`, `DRIFT_LENSES`, `DRIFT_SPEED`, `DRIFT_RAINBOW`, `DRIFT_RAINBOW_SPEED` | | as for `apps/drift.py` |
+
+On battery power the animation pauses: the last frame stays on screen, and it's only redrawn when the status text changes. It resumes when power comes back. Frames are only drawn when the compositor asks for one (sway) or while the window is visible and the monitor is on (X11), so nothing is rendered while a monitor is off. If the animation can't start, for example because there's no OpenGL 3.3, the lock screen stays plain black and the locker retries every 10 s.
+
+### sway
+
+`swaylock-warpman` is swaylock-plugin with the animation as its background. It accepts all of swaylock-plugin's options (`swaylock-warpman --help-swaylock`) and reads its config file. It adds `-f -c 000000` (use `--no-daemonize` to drop `-f`), and options after `--` go to the animation, e.g. `swaylock-warpman -- --rainbow wave`. It authenticates through `/etc/pam.d/swaylock-warpman`, which the package installs. The log goes to `$XDG_RUNTIME_DIR/warpman-lock.log`.
+
+In the sway config:
 
 ```
-set $lock swaylock-plugin -f -c 000000 --command /path/to/warpman/plugins/sway/lock-bg.sh
+set $lock swaylock-warpman
 exec swayidle -w timeout 300 '$lock' before-sleep '$lock'
 bindsym $mod+BackSpace exec $lock
 # recovery if the locker crashes (red screen):
-bindsym --locked $mod+Ctrl+BackSpace exec 'pkill -x swaylock-plugin; $lock'
+bindsym --locked $mod+Ctrl+BackSpace exec 'pkill -x swaylock-warpman; $lock'
 ```
 
 `swaymsg reload` doesn't restart `exec` lines, so restart swayidle yourself (or log out and back in) to pick up the new lock command.
 
-`layer.py` also works as an animated wallpaper on its own. To try it above your windows for a few seconds (clicks pass through), run `plugins/sway/layer.py --layer overlay --duration 5 --status`. `plugins/sway/wayland_protocols/` holds the generated pywayland bindings for wlr-layer-shell, which pywayland doesn't ship.
+At 1920×1080 and 24 fps the background uses about 2.5% of a core (the Python version it replaces used about 6%). `swaylock-warpman --preview` shows the animation above your windows for 10 s (clicks pass through); with `--layer background --duration 0` it is an animated wallpaper.
 
-### Power use (sway)
+### i3 / X11
 
-Measured with `intel_gpu_top` on an Intel Iris Xe laptop, at 3840×1600 with the lock-screen settings. Each figure is the average of 16 one-second samples:
+`i3lock-warpman` replaces i3lock or i3lock-fancy. It starts xsecurelock, which grabs the keyboard and mouse, asks for the password through PAM and keeps the screen covered even if the animation crashes. xsecurelock runs `i3lock-warpman` again on each monitor as its saver, drawing into the window it creates. The saver follows the window's size and stops drawing while the window is hidden or the monitor is off (DPMS). Drift options go before an optional `-- command` (which xsecurelock runs while locked). xsecurelock's own `XSECURELOCK_*` variables pass through (see `man xsecurelock`); the date and time show in the password prompt, and the animation keeps running while the prompt is open. The log goes to `$XDG_RUNTIME_DIR/warpman-lock-x11.log`.
+
+In the i3 config, replace the `i3lock` lines with:
+
+```
+set $lock i3lock-warpman
+exec --no-startup-id xss-lock --transfer-sleep-lock -- $lock
+bindsym $mod+BackSpace exec --no-startup-id $lock
+```
+
+The package depends on xsecurelock and recommends xss-lock. xss-lock locks when the X screensaver fires (`xset s 300` sets the delay) and before suspend. `i3lock-warpman --preview` opens the animation in a normal window.
+
+### Power use
+
+Measured with `intel_gpu_top` on an Intel Iris Xe laptop, at 3840×1600 with the lock-screen settings, with the earlier Python client (it ran the same shaders, so the GPU side is unchanged; the C client needs less CPU). Each figure is the average of 16 one-second samples:
 
 | Mode | GPU busy | GPU power | Package power |
 |---|---|---|---|
@@ -194,28 +236,6 @@ Measured with `intel_gpu_top` on an Intel Iris Xe laptop, at 3840×1600 with the
 - Animating costs about 2 W of package power compared with the still frame. Most of that is frame-rate driven: the CPU wakes for every frame, sway composites and pushes it to the display, and the chip spends less time in its power-saving states.
 - The frame rate is therefore the main lever. `DRIFT_FPS=15` saved about 1.2 W against 24 fps.
 - On battery the animation pauses anyway, so these watts are mostly spent while plugged in.
-
-## Lock screen (i3 / X11)
-
-On X11 the locking is done by [xsecurelock](https://github.com/google/xsecurelock), which replaces i3lock or i3lock-fancy. It grabs the keyboard and mouse, asks for the password through PAM and keeps the screen covered even if the animation crashes. It runs a "saver" program on each monitor, and `plugins/i3/saver.sh` makes that saver the drift animation. `plugins/i3/lock.sh` starts xsecurelock with that saver.
-
-`plugins/i3/saver.py` does the drawing. It renders with the GL backend's shaders straight into the window xsecurelock gives it (`$XSCREENSAVER_WINDOW`), through EGL on X11. Each monitor gets its own process and scene at its native resolution. At about 1900×1500 and 24 fps it uses about 4% of a core. It follows the window's size, and it stops drawing while the window is hidden or the monitor is off (DPMS). Pausing on battery power and the status text work as in the sway version.
-
-The settings are the same `DRIFT_*` variables as for sway (`DRIFT_FPS`, `DRIFT_SCENE_SECONDS`, `DRIFT_HUE`, `DRIFT_SATURATION`, `DRIFT_STATUS`, `DRIFT_ANIMATE_ON_BATTERY`). Errors go to `$XDG_RUNTIME_DIR/warpman-lock-x11.log`. xsecurelock's own `XSECURELOCK_*` variables also pass through (see `man xsecurelock`). The script turns on the date and time in the password prompt, and it keeps the animation running while the prompt is open.
-
-```sh
-sudo apt install xsecurelock xss-lock
-```
-
-Then, in the i3 config, replace the `i3lock` lines with:
-
-```
-set $lock /path/to/warpman/plugins/i3/lock.sh
-exec --no-startup-id xss-lock --transfer-sleep-lock -- $lock
-bindsym $mod+BackSpace exec --no-startup-id $lock
-```
-
-xss-lock locks when the X screensaver fires (`xset s 300` sets the delay) and before suspend. To try the animation without locking anything, run `plugins/i3/saver.py --duration 5 --status`, which opens it in a normal window.
 
 ## License
 

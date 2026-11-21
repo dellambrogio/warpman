@@ -1,0 +1,6 @@
+#
+# PAM configuration for swaylock-warpman (the swaylock-plugin screen locker
+# with the warpman background). By default, it includes the "login" configuration.
+#
+
+auth include login

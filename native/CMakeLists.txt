@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
-cmake_policy(SET CMP0177 NEW)
+if(POLICY CMP0177)
+    cmake_policy(SET CMP0177 NEW)
+endif()
 # (no DESCRIPTION: CPack would prepend it to each package's own description)
 project(warpman VERSION 0.1.0 LANGUAGES C)
 

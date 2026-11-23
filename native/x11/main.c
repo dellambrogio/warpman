@@ -95,8 +95,12 @@ static int run_saver(int argc, char **argv, int preview)
         n = argc;
     WmOpts o;
     int r = wm_opts_parse(&o, n, args, WM_OPTS_X11, PROG " --preview", "[drift options]", NULL);
-    if (r)
+    if (r) {
+        /* bad options: back off as below, so xsecurelock doesn't restart us in a tight loop */
+        if (r < 0 && !preview)
+            wm_sleep_interruptible(10);
         return r > 0 ? 0 : 2;
+    }
     wm_install_signals();
     int code = wm_saver_run(&o);
     if (!preview) {
@@ -175,10 +179,17 @@ int main(int argc, char **argv)
             usage(stdout);
             return 0;
         }
-        /* xscreensaver-style hacks take -window-id with a single dash */
-        for (int i = 1; i < argc; i++)
-            if (!strcmp(argv[i], "-window-id"))
-                argv[i] = "--window-id";
+        /* xscreensaver-style hacks take -window-id with a single dash, and xsecurelock's
+         * saver_multiplex passes -root, which getopt would read as -r -o -o -t; the saver
+         * draws into $XSCREENSAVER_WINDOW anyway, so drop it */
+        int m = 1;
+        for (int i = 1; i < argc; i++) {
+            if (!strcmp(argv[i], "-root"))
+                continue;
+            argv[m++] = strcmp(argv[i], "-window-id") ? argv[i] : "--window-id";
+        }
+        argv[m] = NULL;
+        argc = m;
     }
     const char *win = getenv("XSCREENSAVER_WINDOW");
     int has_window_id = 0;
